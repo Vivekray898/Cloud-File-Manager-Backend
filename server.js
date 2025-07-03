@@ -33,7 +33,7 @@ app.use(express.urlencoded({ extended: true })); // For parsing URL-encoded requ
 
 // Configure CORS to allow requests from your frontend
 app.use(cors({
-    origin: FRONTEND_URL, // Allow requests only from your frontend domain
+    origin: FRONTEND_URL, // Allow requests only from your frontend domain. IMPORTANT: This should be just the domain (e.g., 'https://neet.ct.ws'), NOT include the file path (e.g., 'https://neet.ct.ws/cloud_server.html').
     credentials: true // Allow cookies/session headers (important for sessions)
 }));
 
