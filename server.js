@@ -3,9 +3,13 @@
 // --- Required Modules ---
 const express = require('express');
 const axios = require('axios'); // For making HTTP requests to Microsoft Graph API
-const session = require('express-session'); // For managing user sessions and storing tokens
+const session = require('express-session'); // For managing user sessions
 const cors = require('cors'); // To allow requests from your frontend domain
-// const path = require('path'); // Not strictly needed for this setup, can be removed if desired
+
+// Firebase Admin SDK for server-side interaction with Firestore
+const admin = require('firebase-admin');
+// A session store for express-session that uses Firestore
+const { FirestoreStore } = require('connect-firestore-session');
 
 // --- Configuration ---
 // IMPORTANT: These are now read from environment variables for security!
@@ -15,6 +19,14 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI; // This will be your Render app's callback URL
 const FRONTEND_URL = process.env.FRONTEND_URL; // This will be your InfinityFree domain
 
+
+// Add this somewhere in your Express setup
+app.get('/ping', (req, res) => {
+  res.send('pong');
+});
+
+
+
 // Microsoft Graph API Endpoints
 const MSGRAPH_AUTH_AUTHORIZE_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
 const MSGRAPH_AUTH_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
@@ -22,6 +34,23 @@ const MSGRAPH_API_BASE_URL = 'https://graph.microsoft.com/v1.0';
 
 // Scopes required for OneDrive file access
 const SCOPES = 'openid profile User.Read Files.ReadWrite.All offline_access';
+
+// --- Firebase Initialization ---
+// The service account key will be provided as a JSON string via an environment variable.
+try {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+    });
+    console.log('Firebase Admin SDK initialized successfully.');
+} catch (error) {
+    console.error('Failed to initialize Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_KEY environment variable:', error);
+    // Exit the process if Firebase initialization fails, as the app won't function without it.
+    process.exit(1);
+}
+
+const db = admin.firestore(); // Get the Firestore instance
 
 // --- Express App Setup ---
 const app = express();
@@ -33,18 +62,20 @@ app.use(express.urlencoded({ extended: true })); // For parsing URL-encoded requ
 
 // Configure CORS to allow requests from your frontend
 app.use(cors({
-    origin: FRONTEND_URL, // Allow requests only from your frontend domain
+    origin: FRONTEND_URL, // Allow requests only from your frontend domain (e.g., 'https://neet.ct.ws')
     credentials: true // Allow cookies/session headers (important for sessions)
 }));
 
-// Session middleware setup
-// In a production environment, you should use a more robust session store
-// like 'connect-mongo' or 'connect-redis' instead of the default MemoryStore,
-// especially if you expect high traffic or need session persistence across restarts.
+// Session middleware setup with FirestoreStore
 app.use(session({
     secret: process.env.SESSION_SECRET_KEY, // Read from environment variable
     resave: false, // Don't save session if unmodified
     saveUninitialized: true, // Save new sessions
+    store: new FirestoreStore({
+        database: db, // Pass the initialized Firestore instance
+        collection: 'sessions', // Name of the Firestore collection to store sessions
+        // You can add options like 'logSuccess' or 'logErrors' for debugging
+    }),
     cookie: {
         secure: process.env.NODE_ENV === 'production', // Use secure cookies in production (HTTPS)
         sameSite: 'Lax', // Protects against CSRF attacks
@@ -83,12 +114,20 @@ async function refreshToken(req, res, next) {
         req.session.refreshToken = refresh_token || req.session.refreshToken;
         req.session.expiresAt = Date.now() + (expires_in * 1000); // Convert seconds to milliseconds for expiry
 
-        console.log('Token refreshed successfully!');
-        next(); // Proceed to the original route handler
+        // Save the updated session to Firestore
+        req.session.save((err) => {
+            if (err) {
+                console.error('Error saving session after token refresh:', err);
+            }
+            console.log('Token refreshed and session saved successfully!');
+            next(); // Proceed to the original route handler
+        });
+
     } catch (error) {
         console.error('Error refreshing token:', error.response ? error.response.data : error.message);
         // If token refresh fails, destroy the session and redirect to re-authenticate.
-        req.session.destroy(() => {
+        req.session.destroy((err) => {
+            if (err) console.error('Error destroying session:', err);
             res.redirect(`${FRONTEND_URL}?authSuccess=false&message=${encodeURIComponent('Session expired. Please re-authenticate.')}`);
         });
     }
@@ -152,9 +191,17 @@ app.get('/auth/microsoft/callback', async (req, res) => {
         req.session.refreshToken = refresh_token;
         req.session.expiresAt = Date.now() + (expires_in * 1000); // Convert seconds to milliseconds
 
-        console.log('Authentication successful. Tokens stored in session.');
-        // Redirect back to the frontend with success message.
-        res.redirect(`${FRONTEND_URL}?authSuccess=true&message=${encodeURIComponent('Authenticated successfully!')}`);
+        // Save the session to Firestore after updating tokens
+        req.session.save((err) => {
+            if (err) {
+                console.error('Error saving session after auth callback:', err);
+                return res.redirect(`${FRONTEND_URL}?authSuccess=false&message=${encodeURIComponent('Failed to save session after authentication.')}`);
+            }
+            console.log('Authentication successful. Tokens stored and session saved to Firestore.');
+            // Redirect back to the frontend with success message.
+            res.redirect(`${FRONTEND_URL}?authSuccess=true&message=${encodeURIComponent('Authenticated successfully!')}`);
+        });
+
 
     } catch (error) {
         console.error('Error exchanging code for token:', error.response ? error.response.data : error.message);
