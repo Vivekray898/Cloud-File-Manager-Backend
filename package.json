@@ -16,6 +16,6 @@
     "express": "^5.1.0",
     "express-session": "^1.18.1",
     "firebase-admin": "^11.10.1",
-    "connect-firestore-session": "^1.4.0"
+    "connect-session-firestore": "^1.4.0"
   }
 }
