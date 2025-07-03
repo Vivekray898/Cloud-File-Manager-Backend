@@ -23,6 +23,12 @@ const MSGRAPH_API_BASE_URL = 'https://graph.microsoft.com/v1.0';
 // Scopes required for OneDrive file access
 const SCOPES = 'openid profile User.Read Files.ReadWrite.All offline_access';
 
+// Add this somewhere in your Express setup
+app.get('/ping', (req, res) => {
+  res.send('pong');
+});
+
+
 // --- Express App Setup ---
 const app = express();
 const PORT = process.env.PORT || 3000; // Render will set process.env.PORT for you
